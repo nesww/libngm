@@ -1,0 +1,14 @@
+nagame (libngm)
+
+This library aims to provide a basic abstraction layer (or API) to handle drawing on your screen through the legacy DRM API
+(preferably from a fresh TTY without any graphical server running, since DRM master may not be available).
+For now, it only uses the CPU and a dumb frame buffer, tearing can happen, no vblank yet and buffer flipping.
+
+Main functionalities as is:
+- create a ngm_root that acts as the main container for the abstraction
+- from this container you have access to informations about your display screen (for now the first found, no multiscreen), such as width, height, refresh rate
+- you also have access to a framebuffer mapped to a dumb framebuffer that the kernel will use to draw
+
+this framebuffer is the main entrypoint for you to play with drawing on your screen
+
+See examples in test.c file, for now a very basic usage of this library.

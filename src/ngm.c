@@ -1,0 +1,246 @@
+#include <drm/drm.h>
+#include <drm/drm_mode.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include "../include/libngm.h"
+#include <stdlib.h>
+#include <xf86drmMode.h>
+
+ngm_root *ngm_get_root(int fd) {
+    ngm_root *ngm = malloc(sizeof(ngm_root));
+    if (!ngm) {
+        perror("malloc");
+        return NULL;
+    }
+    drmModeResPtr resources = drmModeGetResources(fd);
+
+    ngm_display_output *info = _ngm_get_display_output(fd, resources);
+    if (!info) {
+        perror("_ngm_get_display_output");
+        goto clean_ngm;
+    }
+    ngm_framebuffer *fb = ngm_get_dumb_buffer(fd, info);
+    if (!fb) {
+        perror("ngm_get_dumb_buffer");
+        _ngm_free_display_info(info);
+        goto clean_ngm;
+    }
+
+    ngm->display_info = info;
+    ngm->fb           = fb;
+    ngm->fd           = fd;
+
+    drmModeFreeResources(resources);
+    return ngm;
+
+    clean_ngm:
+        drmModeFreeResources(resources);
+        free(ngm);
+        return NULL;
+}
+
+
+int
+ngm_get_drm_fd(const char *path) {
+    int fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        perror("ngm_get_drm_fd");
+        return -1;
+    }
+    return fd;
+}
+
+void
+ngm_print_drm_informations(int fd, drmModeResPtr res) {
+    if (res) {
+        printf("Connectors: %p (%d)\n", (void*)res->connectors, res->count_connectors);
+        printf("Encoders: %p (%d)\n", (void*)res->encoders, res->count_encoders);
+        printf("CRTCs: %p (%d)\n", (void*)res->crtcs, res->count_crtcs);
+
+        for (int i = 0; i < res->count_connectors; ++i) {
+            drmModeConnectorPtr con = drmModeGetConnector(fd, res->connectors[i]);
+            if (con) {
+
+                if (con->count_modes > 0) {
+                    printf("(id=%d) = Connector info: %ux%u@%u\n",
+                        con->connector_id,
+                        con->modes->hdisplay,
+                        con->modes->vdisplay,
+                        con->modes->vrefresh
+                    );
+
+                    for (int j = 0; j < con->count_encoders; ++j) {
+                        drmModeEncoderPtr enc = drmModeGetEncoder(fd, con->encoders[j]);
+                        if (enc) {
+                            for (int k = 0; k < res->count_crtcs; ++k) {
+                                if ((enc->possible_crtcs >> k) & 1) {
+                                    printf("(id=%d) = encoder %d can use CRTC[%d] = id %u\n", con->connector_id, enc->encoder_id, k, res->crtcs[k]);
+                                }
+                            }
+                        drmModeFreeEncoder(enc);
+                        }
+                    }
+                } else {
+                    printf("Connector %d has no modes\n", con->connector_id);
+                }
+                drmModeFreeConnector(con);
+            }
+        }
+    }
+}
+
+ngm_framebuffer *
+ngm_get_dumb_buffer(int fd, ngm_display_output *info) {
+    if (!info) {
+        return NULL;
+    }
+    ngm_framebuffer * fb = malloc(sizeof(ngm_framebuffer));
+    if (!fb) {
+        perror("malloc (ngm_framebuffer)");
+        return NULL;
+    }
+
+    fb->width = info->mode.hdisplay;
+    fb->height = info->mode.vdisplay;
+
+    struct drm_mode_create_dumb create_dumb = {
+        .width = fb->width,
+        .height = fb->height,
+        .bpp = 32,
+    };
+
+    int alloc = ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_dumb);
+    if (alloc != 0) {
+        printf("error: failed to get informations from the kernel for allocating dumb buffer\n");
+        perror("ioctl");
+        goto clean;
+    }
+    struct drm_mode_map_dumb map_dumb = {
+        .handle = create_dumb.handle,
+        .pad = 0
+    };
+
+    int map_res = ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map_dumb);
+    if (map_res != 0) {
+        printf("error: failed to get the offset for the map for dumb buffer\n");
+        perror("ioctl");
+        goto clean;
+    }
+
+    uint32_t fb_id = 0;
+    if (drmModeAddFB(fd,info->mode.hdisplay,info->mode.vdisplay,NGM_DUMB_FB_COLOR_DEPTH_BITS,create_dumb.bpp,create_dumb.pitch,create_dumb.handle,&fb_id)) {
+        perror("drmModeAddFB");
+        goto clean;
+    }
+
+    void *map = mmap(NULL, create_dumb.size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, map_dumb.offset);
+    if (map == MAP_FAILED) {
+        perror("mmap");
+        goto clean;
+    }
+    fb->fb_id  = fb_id;
+    fb->handle = create_dumb.handle;
+    fb->pitch  = create_dumb.pitch;
+    fb->size   = create_dumb.size;
+    fb->map    = map;
+
+    return fb;
+
+    clean:
+        free(fb);
+        return NULL;
+}
+
+drmModeConnectorPtr
+_ngm_get_connected_connector(int fd, drmModeResPtr res) {
+    drmModeConnectorPtr out = NULL;
+    for (int i = 0; i < res->count_connectors; ++i) {
+        drmModeConnectorPtr con = drmModeGetConnector(fd, res->connectors[i]);
+        if (con && con->connection ==  DRM_MODE_CONNECTED) {
+            out = con;
+            break;
+        }
+    }
+    return out;
+}
+
+ngm_display_output *
+_ngm_get_display_output(int fd, drmModeResPtr res) {
+    drmModeCrtcPtr crtc = NULL;
+    drmModeConnectorPtr con = _ngm_get_connected_connector(fd, res);
+    uint8_t found = 0x0;
+    if (con) {
+        for (int i = 0; i < con->count_encoders; ++i) {
+            if (!found) {
+                drmModeEncoderPtr enc = drmModeGetEncoder(fd, con->encoders[i]);
+                if (enc) {
+                    for (int j = 0; j < res->count_crtcs; ++j) {
+                        if ((enc->possible_crtcs >> j) & 1) {
+                            crtc = drmModeGetCrtc(fd, res->crtcs[j]);
+                            found = 0x1;
+                            break;
+                        }
+                    }
+                    drmModeFreeEncoder(enc);
+                }
+            }
+        }
+    }
+    if (found) {
+        ngm_display_output* ngm_do = malloc(sizeof(ngm_display_output));
+        if (!ngm_do) {
+            perror("malloc");
+            return NULL;
+        }
+        ngm_do->crtc = crtc;
+        ngm_do->crtc_id = crtc->crtc_id;
+        ngm_do->connector = con;
+        ngm_do->connector_id = con->connector_id;
+        ngm_do->mode = con->modes[0];
+        return ngm_do;
+    }
+    drmModeFreeConnector(con);
+    return NULL;
+}
+
+void
+ngm_print_driver_info(int fd) {
+    drmVersionPtr ver = drmGetVersion(fd);
+    if (ver) {
+        printf("Driver: %s\n", ver->name);
+        printf("Version: %d.%d.%d\n", ver->version_major, ver->version_minor, ver->version_patchlevel);
+        drmFreeVersion(ver);
+    }
+
+}
+
+void
+_ngm_free_display_info(ngm_display_output *info) {
+    if (!info) return;
+
+    drmModeFreeConnector(info->connector);
+    drmModeFreeCrtc(info->crtc);
+    free(info);
+}
+
+void
+_ngm_free_framebuffer(int fd, ngm_framebuffer *fb) {
+    if (!fb) return;
+
+    munmap(fb->map, fb->size);
+    drmModeRmFB(fd, fb->fb_id);
+    struct drm_mode_destroy_dumb destroy = {
+        .handle = fb->handle,
+    };
+    ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+    free(fb);
+}
+
+void
+ngm_free_root(ngm_root *ngm) {
+    _ngm_free_display_info(ngm->display_info);
+    _ngm_free_framebuffer(ngm->fd, ngm->fb);
+}
