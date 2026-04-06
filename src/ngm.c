@@ -9,10 +9,12 @@
 #include <stdlib.h>
 #include <xf86drmMode.h>
 
+
 ngm_root *ngm_get_root(int fd) {
     ngm_root *ngm = malloc(sizeof(ngm_root));
     if (!ngm) {
         perror("malloc");
+        NGM_ERROR("could not allocate memory for the ngm root");
         return NULL;
     }
     drmModeResPtr resources = drmModeGetResources(fd);
@@ -20,11 +22,13 @@ ngm_root *ngm_get_root(int fd) {
     ngm_display_output *info = _ngm_get_display_output(fd, resources);
     if (!info) {
         perror("_ngm_get_display_output");
+        NGM_ERROR("could not get the display output");
         goto clean_ngm;
     }
     ngm_framebuffer *fb = ngm_get_dumb_buffer(fd, info);
     if (!fb) {
         perror("ngm_get_dumb_buffer");
+        NGM_ERROR("could not get the dumb buffer");
         _ngm_free_display_info(info);
         goto clean_ngm;
     }
@@ -34,6 +38,7 @@ ngm_root *ngm_get_root(int fd) {
     ngm->fd           = fd;
 
     drmModeFreeResources(resources);
+    NGM_INFO("ngm_root was created with a framebuffer_id: %d", ngm->fb->fb_id);
     return ngm;
 
     clean_ngm:
@@ -99,7 +104,8 @@ ngm_get_dumb_buffer(int fd, ngm_display_output *info) {
     }
     ngm_framebuffer * fb = malloc(sizeof(ngm_framebuffer));
     if (!fb) {
-        perror("malloc (ngm_framebuffer)");
+        perror("malloc");
+        NGM_ERROR("could not allocate memory for the framebuffer");
         return NULL;
     }
 
@@ -114,8 +120,8 @@ ngm_get_dumb_buffer(int fd, ngm_display_output *info) {
 
     int alloc = ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_dumb);
     if (alloc != 0) {
-        printf("error: failed to get informations from the kernel for allocating dumb buffer\n");
-        perror("ioctl");
+        perror("CREATE_DUMB");
+        NGM_ERROR("failed to create the dumb buffer map");
         goto clean;
     }
     struct drm_mode_map_dumb map_dumb = {
@@ -125,20 +131,22 @@ ngm_get_dumb_buffer(int fd, ngm_display_output *info) {
 
     int map_res = ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map_dumb);
     if (map_res != 0) {
-        printf("error: failed to get the offset for the map for dumb buffer\n");
-        perror("ioctl");
+        perror("MAP_DUMB");
+        NGM_ERROR("failed to map the dumb buffer");
         goto clean;
     }
 
     uint32_t fb_id = 0;
     if (drmModeAddFB(fd,info->mode.hdisplay,info->mode.vdisplay,NGM_DUMB_FB_COLOR_DEPTH_BITS,create_dumb.bpp,create_dumb.pitch,create_dumb.handle,&fb_id)) {
         perror("drmModeAddFB");
+        NGM_ERROR("could not add the dumb buffer to DRM mode");
         goto clean;
     }
 
     void *map = mmap(NULL, create_dumb.size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, map_dumb.offset);
     if (map == MAP_FAILED) {
         perror("mmap");
+        NGM_ERROR("could not mmap the map for the dumb buffer");
         goto clean;
     }
     fb->fb_id  = fb_id;
@@ -146,6 +154,10 @@ ngm_get_dumb_buffer(int fd, ngm_display_output *info) {
     fb->pitch  = create_dumb.pitch;
     fb->size   = create_dumb.size;
     fb->map    = map;
+
+    NGM_INFO("dumb framebuffer was created, with an id: %d", fb->fb_id);
+    NGM_DEBUG("framebuffer width: %d, framebuffer width: %d", fb->width, fb->height);
+    NGM_DEBUG("framebuffer map address: %p , pitch: %d", fb->map, fb->pitch);
 
     return fb;
 
@@ -218,6 +230,69 @@ ngm_print_driver_info(int fd) {
 }
 
 void
+ngm_show_CRTC(ngm_root *ngm) {
+    printf("First CRTC found: %d, %s (%d x %d @ %d)\n",
+        ngm->display_info->crtc_id,
+        ngm->display_info->mode.name,
+        ngm->display_info->mode.hdisplay,
+        ngm->display_info->mode.vdisplay,
+        ngm->display_info->mode.vrefresh
+    );
+}
+
+void
+ngm_show_framebuffer(ngm_root *ngm) {
+    printf("Framebuffer informations: %dx%d pitch=%d size=%ld fb_id=%d\n",
+        ngm->fb->width,
+        ngm->fb->height,
+        ngm->fb->pitch,
+        ngm->fb->size,
+        ngm->fb->fb_id);
+}
+
+uint8_t __ngm_validate_coords_for_buffer(ngm_framebuffer *fb, uint32_t x, uint32_t y) {
+    if (x < 0 || x >= fb->width) {
+        NGM_ERROR("invalid x position: tried to draw a pixel at %d when framebuffer has 0 to %d width", x, fb->width);
+        return 0;
+    }
+    if (y < 0 || y >= fb->height) {
+        NGM_ERROR("invalid y position: tried to draw a pixel at %d when framebuffer has 0 to %d height", y, fb->height);
+        return 0;
+    }
+    return 1;
+}
+
+void
+ngm_set_pixel(ngm_framebuffer *fb, uint32_t x, uint32_t y, uint32_t color) {
+    if (!fb) {
+        NGM_WARN("no framebuffer given, won't set pixel");
+        return;
+    }
+
+    if (!__ngm_validate_coords_for_buffer(fb, x, y)) return;
+
+    *((uint32_t*)fb->map + (fb->width * y + x)) = color;
+}
+
+void
+ngm_set_line(ngm_framebuffer *fb, uint32_t sx, uint32_t sy, uint32_t ax, uint32_t ay, uint32_t color) {
+    if (!fb) {
+        NGM_WARN("no framebuffer given, won't set line");
+        return;
+    }
+    if (!__ngm_validate_coords_for_buffer(fb, sx, sy)) return;
+    if (!__ngm_validate_coords_for_buffer(fb, ax, ay)) return;
+
+    if (sy != ay) {
+        NGM_NOT_IMPLEMENTED("ngm_set_line with two ys different");
+    }
+
+    for (int i = sx; i != ax; ++i) {
+        ngm_set_pixel(fb, i, sy, color);
+    }
+}
+
+void
 _ngm_free_display_info(ngm_display_output *info) {
     if (!info) return;
 
@@ -243,4 +318,48 @@ void
 ngm_free_root(ngm_root *ngm) {
     _ngm_free_display_info(ngm->display_info);
     _ngm_free_framebuffer(ngm->fd, ngm->fb);
+}
+
+static FILE *_ngm_log_file = NULL;
+static uint8_t _ngm_log_level = NGM_LOG_NONE;
+
+void
+ngm_log_init() {
+    if (_ngm_log_file) {NGM_WARN("logger already initialized"); return;}
+    _ngm_log_file = fopen(NGM_LOG_DEFAULT_PATH, "a");
+}
+
+uint8_t
+ngm_get_log_level() {
+    return _ngm_log_level;
+}
+
+void
+ngm_log_set_level(uint8_t log_level) {
+    _ngm_log_level = log_level;
+}
+
+void ngm_log_set_file(const char *path) {
+    if (_ngm_log_level) fclose(_ngm_log_file);
+    _ngm_log_file = fopen(path, "a");
+}
+
+void
+_ngm_log(uint8_t level, const char *file, int line, const char *func, const char *fmt, ...) {
+    const char *names[] = {"none", "info", "debug", "warn", "error"};
+
+    if (level < 1 || level > 4) return;
+
+    va_list ap;
+    va_start(ap, fmt);
+
+    FILE *out = _ngm_log_file ? _ngm_log_file : stderr;
+
+    fprintf(out, "libngm: %s %s: %d (%s) ", names[level], file, line, func);
+    vfprintf(out, fmt, ap);
+    fprintf(out, "\n");
+
+    va_end(ap);
+
+    if (_ngm_log_file) fflush(_ngm_log_file);
 }
