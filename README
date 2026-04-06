@@ -9,7 +9,7 @@ Main functionalities as is:
 - from this container you have access to informations about your display screen (for now the first found, no multiscreen), such as width, height, refresh rate
 - you also have access to a framebuffer mapped to a dumb framebuffer that the kernel will use to draw
 - you can draw on the screen with two functions at your ease: ngm_set_pixel, that will set a single pixel a given coordinates to a given color (hex)
-- you can also draw a line, with ngm_set_line, for now only using different x, but same y, please wait for Bresenham implementation.
+- you can also draw a line, with ngm_set_line, it uses the bresenham algorithm
 - you can enable the logger that will give infos when using the lib, output is defaulted to none, and default file path is ./libngm.log
 - you can set different levels of logging for your use at the desired path, but keep in mind that its very simple for now
 

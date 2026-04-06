@@ -45,57 +45,34 @@ typedef struct {
 
 extern ngm_root *ngm_get_root(int fd);
 extern int ngm_get_drm_fd(const char *path);
-extern ngm_display_output *_ngm_get_display_output(int fd, drmModeResPtr res);
 extern ngm_framebuffer *ngm_get_dumb_buffer(int fd, ngm_display_output *info);
 
 extern void ngm_show_drm(int fd, drmModeResPtr res);
 extern void ngm_show_CRTC(ngm_root *ngm);
 extern void ngm_show_framebuffer(ngm_root *ngm);
 
-extern void ngm_set_pixel(ngm_framebuffer *fb, uint32_t x, uint32_t y, uint32_t color);
-extern void ngm_set_line(ngm_framebuffer *fb, uint32_t sx, uint32_t sy, uint32_t ax, uint32_t ay, uint32_t color);
+typedef struct {
+    int32_t x;
+    int32_t y;
+} ngm_vec2;
 
-extern void _ngm_free_display_info(ngm_display_output *info);
+#define NGM_FB_PX(fb, x, y) \
+    (((uint32_t*)(fb)->map)[(fb)->width * (y) + (x)])
+
+extern void ngm_set_pixel(ngm_framebuffer *fb, ngm_vec2* p, uint32_t color);
+extern void ngm_set_line(ngm_framebuffer *fb, ngm_vec2 *start, ngm_vec2 *destination, uint32_t color);
+
 extern void ngm_free_root(ngm_root *ngm);
 
-
-void _ngm_log(uint8_t level, const char *file, int line, const char *func, const char *fmt, ...);
 extern void ngm_log_init();
 extern void ngm_log_set_file(const char *path);
 extern void ngm_log_set_level(uint8_t log_level);
 extern uint8_t ngm_get_log_level();
 
-#define NGM_LOG_DEFAULT_PATH "./libngm.log"
-
 #define NGM_LOG_NONE  0x0
-#define NGM_LOG_INFO  0x1
-#define NGM_LOG_DEBUG 0x2
-#define NGM_LOG_WARN  0x3
-#define NGM_LOG_ERROR 0x4
-
-#define NGM_INFO(...) \
-    do { \
-        if (ngm_get_log_level() >= NGM_LOG_INFO) \
-        _ngm_log(NGM_LOG_INFO, __FILE__, __LINE__, __func__, __VA_ARGS__); \
-    } while(0) \
-
-#define NGM_DEBUG(...) \
-    do { \
-        if (ngm_get_log_level() >= NGM_LOG_DEBUG) \
-        _ngm_log(NGM_LOG_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__); \
-    } while(0) \
-
-#define NGM_WARN(...) \
-    do { \
-        if (ngm_get_log_level() >= NGM_LOG_WARN) \
-        _ngm_log(NGM_LOG_WARN, __FILE__, __LINE__, __func__, __VA_ARGS__); \
-    } while(0) \
-
-#define NGM_ERROR(...) \
-    do { \
-        if (ngm_get_log_level() >= NGM_LOG_ERROR) \
-        _ngm_log(NGM_LOG_ERROR, __FILE__, __LINE__, __func__, __VA_ARGS__); \
-    } while(0) \
-
+#define NGM_LOG_ERROR 0x1
+#define NGM_LOG_WARN  0x2
+#define NGM_LOG_INFO  0x3
+#define NGM_LOG_DEBUG 0x4
 
 #endif

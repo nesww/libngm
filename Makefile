@@ -14,13 +14,14 @@ clean:
 	rm -rf $(BUILDS)/libngm.so
 
 build: $(SOURCES)/ngm.c $(INCLUDES)/libngm.h
-	$(CC) -fPIC $(CFLAGS) $(INCLUDESLIBS) -c $(SOURCES)/* -o $(BUILDS)/libngm.o
+	$(CC) -fPIC $(CFLAGS) $(INCLUDESLIBS) -I$(INCLUDES) -c $(SOURCES)/* -o $(BUILDS)/libngm.o
 	$(CC) -shared -o $(BUILDS)/libngm.so $(BUILDS)/libngm.o $(LINKLIBS)
 	rm -f $(BUILDS)/libngm.o
 
 install: build
 	sudo cp $(BUILDS)/libngm.so /usr/local/lib
 	sudo cp $(INCLUDES)/libngm.h /usr/local/include
+	sudo ldconfig
 
 uninstall:
 	sudo rm -f /usr/local/lib/libngm.so

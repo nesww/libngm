@@ -1,7 +1,16 @@
 #include "include/libngm.h"
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+static volatile int running = 1;
+
+void handle_sig(int sig) {
+    (void)sig;
+    running = 0;
+    printf("SIGINT: exiting\n");
+}
 
 int main() {
     ngm_log_init();
@@ -21,12 +30,9 @@ int main() {
     ngm_show_CRTC(ngm);
     ngm_show_framebuffer(ngm);
 
-    for (int y = 200; y < 300; ++y) {
-        ngm_set_line(ngm->fb, 0, y, ngm->fb->width/2, y, 0xFF0000);
-    }
-
-
-    ngm_set_line(ngm->fb, 100, 700, 1900, 700, 0x00FF00);
+    ngm_vec2 start = {0,200};
+    ngm_vec2 dest = {100,300};
+    ngm_set_line(ngm->fb, &start, &dest, 0xFF0000);
 
 
     if (drmModeSetCrtc(fd, ngm->display_info->crtc_id, ngm->fb->fb_id, 0, 0, &ngm->display_info->connector_id, 1, &ngm->display_info->mode)) {
@@ -36,9 +42,8 @@ int main() {
         return 1;
     }
 
-    while(1) {
-        pause();
-    }
+    signal(SIGINT, handle_sig);
+    while (running) pause();
 
     //clean
     ngm_free_root(ngm);

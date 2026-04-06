@@ -8,9 +8,12 @@
 #include "../include/libngm.h"
 #include <stdlib.h>
 #include <xf86drmMode.h>
+#include "../include/libngm_internal.h"
 
 
-ngm_root *ngm_get_root(int fd) {
+
+ngm_root *
+ngm_get_root(int fd) {
     ngm_root *ngm = malloc(sizeof(ngm_root));
     if (!ngm) {
         perror("malloc");
@@ -133,21 +136,21 @@ ngm_get_dumb_buffer(int fd, ngm_display_output *info) {
     if (map_res != 0) {
         perror("MAP_DUMB");
         NGM_ERROR("failed to map the dumb buffer");
-        goto clean;
+        goto clean_addfb;
     }
 
     uint32_t fb_id = 0;
     if (drmModeAddFB(fd,info->mode.hdisplay,info->mode.vdisplay,NGM_DUMB_FB_COLOR_DEPTH_BITS,create_dumb.bpp,create_dumb.pitch,create_dumb.handle,&fb_id)) {
         perror("drmModeAddFB");
         NGM_ERROR("could not add the dumb buffer to DRM mode");
-        goto clean;
+        goto clean_addfb;
     }
 
     void *map = mmap(NULL, create_dumb.size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, map_dumb.offset);
     if (map == MAP_FAILED) {
         perror("mmap");
         NGM_ERROR("could not mmap the map for the dumb buffer");
-        goto clean;
+        goto clean_mmap;
     }
     fb->fb_id  = fb_id;
     fb->handle = create_dumb.handle;
@@ -161,6 +164,11 @@ ngm_get_dumb_buffer(int fd, ngm_display_output *info) {
 
     return fb;
 
+    clean_mmap:
+        drmModeRmFB(fd, fb_id);
+    clean_addfb:
+        struct drm_mode_destroy_dumb destroy = {.handle = create_dumb.handle };
+        ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
     clean:
         free(fb);
         return NULL;
@@ -175,6 +183,7 @@ _ngm_get_connected_connector(int fd, drmModeResPtr res) {
             out = con;
             break;
         }
+         if (con) drmModeFreeConnector(con);
     }
     return out;
 }
@@ -250,45 +259,69 @@ ngm_show_framebuffer(ngm_root *ngm) {
         ngm->fb->fb_id);
 }
 
-uint8_t __ngm_validate_coords_for_buffer(ngm_framebuffer *fb, uint32_t x, uint32_t y) {
-    if (x < 0 || x >= fb->width) {
-        NGM_ERROR("invalid x position: tried to draw a pixel at %d when framebuffer has 0 to %d width", x, fb->width);
+uint8_t
+_ngm_valid_vec2_in_buffer(ngm_framebuffer *fb, ngm_vec2 *p) {
+    if (p->x < 0 || p->x >= fb->width) {
+        NGM_ERROR("invalid x position: tried to draw a pixel at %d when framebuffer has 0 to %d width", p->x, fb->width);
         return 0;
     }
-    if (y < 0 || y >= fb->height) {
-        NGM_ERROR("invalid y position: tried to draw a pixel at %d when framebuffer has 0 to %d height", y, fb->height);
+    if (p->y < 0 || p->y >= fb->height) {
+        NGM_ERROR("invalid y position: tried to draw a pixel at %d when framebuffer has 0 to %d height", p->y, fb->height);
         return 0;
     }
     return 1;
 }
 
 void
-ngm_set_pixel(ngm_framebuffer *fb, uint32_t x, uint32_t y, uint32_t color) {
+ngm_set_pixel(ngm_framebuffer *fb, ngm_vec2 *p, uint32_t color) {
     if (!fb) {
         NGM_WARN("no framebuffer given, won't set pixel");
         return;
     }
 
-    if (!__ngm_validate_coords_for_buffer(fb, x, y)) return;
+    if (!_ngm_valid_vec2_in_buffer(fb, p)) return;
 
-    *((uint32_t*)fb->map + (fb->width * y + x)) = color;
+    NGM_FB_PX(fb, p->x, p->y) = color;
 }
 
 void
-ngm_set_line(ngm_framebuffer *fb, uint32_t sx, uint32_t sy, uint32_t ax, uint32_t ay, uint32_t color) {
+ngm_set_line(ngm_framebuffer *fb, ngm_vec2* start, ngm_vec2 *destination, uint32_t color) {
     if (!fb) {
         NGM_WARN("no framebuffer given, won't set line");
         return;
     }
-    if (!__ngm_validate_coords_for_buffer(fb, sx, sy)) return;
-    if (!__ngm_validate_coords_for_buffer(fb, ax, ay)) return;
+    if (!_ngm_valid_vec2_in_buffer(fb, start)) return;
+    if (!_ngm_valid_vec2_in_buffer(fb, destination)) return;
 
-    if (sy != ay) {
-        NGM_NOT_IMPLEMENTED("ngm_set_line with two ys different");
-    }
+    int32_t dx = destination->x - start->x;
+    int32_t dy = destination->y - start->y;
 
-    for (int i = sx; i != ax; ++i) {
-        ngm_set_pixel(fb, i, sy, color);
+    int32_t inc_x = dx < 0 ? -1 : 1;
+    int32_t inc_y = dy < 0 ? -1 : 1;
+    uint32_t e = 0;
+
+    ngm_vec2 cursor = {start->x, start->y};
+
+    if (abs(dx) >= abs(dy)) {
+        for(;cursor.x != destination->x; cursor.x += inc_x) {
+            ngm_vec2 p = {cursor.x, cursor.y};
+            ngm_set_pixel(fb, &p, color);
+            e+= abs(dy);
+            if(e>=abs(dx)) {
+                e-=abs(dx);
+                cursor.y += inc_y;
+            }
+        }
+    } else {
+        for(;cursor.y != destination->y; cursor.y += inc_y) {
+            ngm_vec2 p = {cursor.x, cursor.y};
+            ngm_set_pixel(fb, &p, color);
+            e+= abs(dx);
+            if(e>=abs(dy)) {
+                e-=abs(dy);
+                cursor.x += inc_x;
+            }
+        }
     }
 }
 
@@ -325,8 +358,7 @@ static uint8_t _ngm_log_level = NGM_LOG_NONE;
 
 void
 ngm_log_init() {
-    if (_ngm_log_file) {NGM_WARN("logger already initialized"); return;}
-    _ngm_log_file = fopen(NGM_LOG_DEFAULT_PATH, "a");
+    ngm_log_set_file(NGM_LOG_DEFAULT_PATH);
 }
 
 uint8_t
@@ -340,13 +372,13 @@ ngm_log_set_level(uint8_t log_level) {
 }
 
 void ngm_log_set_file(const char *path) {
-    if (_ngm_log_level) fclose(_ngm_log_file);
+    if (_ngm_log_file) fclose(_ngm_log_file);
     _ngm_log_file = fopen(path, "a");
 }
 
 void
 _ngm_log(uint8_t level, const char *file, int line, const char *func, const char *fmt, ...) {
-    const char *names[] = {"none", "info", "debug", "warn", "error"};
+    const char *names[] = {"none", "error", "warn", "info", "debug"};
 
     if (level < 1 || level > 4) return;
 
