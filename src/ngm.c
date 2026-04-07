@@ -10,14 +10,12 @@
 #include <xf86drmMode.h>
 #include "../include/libngm_internal.h"
 
-
-
 ngm_root *
 ngm_get_root(int fd) {
     ngm_root *ngm = malloc(sizeof(ngm_root));
     if (!ngm) {
         perror("malloc");
-        NGM_ERROR("could not allocate memory for the ngm root");
+        NGM_WARN("could not allocate memory for the ngm root");
         return NULL;
     }
     drmModeResPtr resources = drmModeGetResources(fd);
@@ -25,13 +23,13 @@ ngm_get_root(int fd) {
     ngm_display_output *info = _ngm_get_display_output(fd, resources);
     if (!info) {
         perror("_ngm_get_display_output");
-        NGM_ERROR("could not get the display output");
+        NGM_WARN("could not get the display output");
         goto clean_ngm;
     }
     ngm_framebuffer *fb = ngm_get_dumb_buffer(fd, info);
     if (!fb) {
         perror("ngm_get_dumb_buffer");
-        NGM_ERROR("could not get the dumb buffer");
+        NGM_WARN("could not get the dumb buffer");
         _ngm_free_display_info(info);
         goto clean_ngm;
     }
@@ -50,12 +48,12 @@ ngm_get_root(int fd) {
         return NULL;
 }
 
-
 int
 ngm_get_drm_fd(const char *path) {
     int fd = open(path, O_RDWR | O_CLOEXEC);
     if (fd < 0) {
         perror("ngm_get_drm_fd");
+        NGM_WARN("failed to open file descriptor for given path: %s\n", path);
         return -1;
     }
     return fd;
@@ -214,6 +212,7 @@ _ngm_get_display_output(int fd, drmModeResPtr res) {
         ngm_display_output* ngm_do = malloc(sizeof(ngm_display_output));
         if (!ngm_do) {
             perror("malloc");
+            NGM_WARN("failed to malloc for ngm_display_output");
             return NULL;
         }
         ngm_do->crtc = crtc;
@@ -239,34 +238,34 @@ ngm_print_driver_info(int fd) {
 }
 
 void
-ngm_show_CRTC(ngm_root *ngm) {
+ngm_show_CRTC(ngm_root *root) {
     printf("First CRTC found: %d, %s (%d x %d @ %d)\n",
-        ngm->display_info->crtc_id,
-        ngm->display_info->mode.name,
-        ngm->display_info->mode.hdisplay,
-        ngm->display_info->mode.vdisplay,
-        ngm->display_info->mode.vrefresh
+        root->display_info->crtc_id,
+        root->display_info->mode.name,
+        root->display_info->mode.hdisplay,
+        root->display_info->mode.vdisplay,
+        root->display_info->mode.vrefresh
     );
 }
 
 void
-ngm_show_framebuffer(ngm_root *ngm) {
+ngm_show_framebuffer(ngm_root *root) {
     printf("Framebuffer informations: %dx%d pitch=%d size=%ld fb_id=%d\n",
-        ngm->fb->width,
-        ngm->fb->height,
-        ngm->fb->pitch,
-        ngm->fb->size,
-        ngm->fb->fb_id);
+        root->fb->width,
+        root->fb->height,
+        root->fb->pitch,
+        root->fb->size,
+        root->fb->fb_id);
 }
 
 uint8_t
 _ngm_valid_vec2_in_buffer(ngm_framebuffer *fb, ngm_vec2 *p) {
     if (p->x < 0 || p->x >= fb->width) {
-        NGM_ERROR("invalid x position: tried to draw a pixel at %d when framebuffer has 0 to %d width", p->x, fb->width);
+        NGM_WARN("invalid x position: tried to draw a pixel at %d when framebuffer has 0 to %d width", p->x, fb->width);
         return 0;
     }
     if (p->y < 0 || p->y >= fb->height) {
-        NGM_ERROR("invalid y position: tried to draw a pixel at %d when framebuffer has 0 to %d height", p->y, fb->height);
+        NGM_WARN("invalid y position: tried to draw a pixel at %d when framebuffer has 0 to %d height", p->y, fb->height);
         return 0;
     }
     return 1;
@@ -282,6 +281,12 @@ ngm_set_pixel(ngm_framebuffer *fb, ngm_vec2 *p, uint32_t color) {
     if (!_ngm_valid_vec2_in_buffer(fb, p)) return;
 
     NGM_FB_PX(fb, p->x, p->y) = color;
+}
+
+void
+ngm_set_pixel_xy(ngm_framebuffer *fb, int32_t x, int32_t y, uint32_t color) {
+    ngm_vec2 p = {x,y};
+    ngm_set_pixel(fb, &p, color);
 }
 
 void
@@ -326,6 +331,13 @@ ngm_set_line(ngm_framebuffer *fb, ngm_vec2* start, ngm_vec2 *destination, uint32
 }
 
 void
+ngm_set_line_xy(ngm_framebuffer *fb, int32_t sx, int32_t sy, int32_t dx, int32_t dy,  uint32_t color) {
+    ngm_vec2 start = {sx,sy};
+    ngm_vec2 dest  = {dx,dy};
+    ngm_set_line(fb, &start, &dest, color);
+}
+
+void
 _ngm_free_display_info(ngm_display_output *info) {
     if (!info) return;
 
@@ -348,9 +360,9 @@ _ngm_free_framebuffer(int fd, ngm_framebuffer *fb) {
 }
 
 void
-ngm_free_root(ngm_root *ngm) {
-    _ngm_free_display_info(ngm->display_info);
-    _ngm_free_framebuffer(ngm->fd, ngm->fb);
+ngm_free_root(ngm_root *root) {
+    _ngm_free_display_info(root->display_info);
+    _ngm_free_framebuffer(root->fd, root->fb);
 }
 
 static FILE *_ngm_log_file = NULL;
@@ -394,4 +406,22 @@ _ngm_log(uint8_t level, const char *file, int line, const char *func, const char
     va_end(ap);
 
     if (_ngm_log_file) fflush(_ngm_log_file);
+}
+
+uint8_t ngm_set_crtc_from_root(ngm_root *root) {
+    if (
+        drmModeSetCrtc(
+            root->fd,
+            root->display_info->crtc_id,
+            root->fb->fb_id,
+            0, 0,
+            &root->display_info->connector_id, 1,
+            &root->display_info->mode
+        )
+    ) {
+        perror("drmModeSetCrtc");
+        NGM_WARN("failed to set crtc for the root:");
+        return FALSE;
+    }
+    return TRUE;
 }

@@ -1,4 +1,4 @@
-#include "include/libngm.h"
+#include <libngm.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,32 +21,34 @@ int main() {
         return 1;
     }
 
-    ngm_root *ngm = ngm_get_root(fd);
-    if (!ngm) {
+    ngm_root *root = ngm_get_root(fd);
+    if (!root) {
         printf("error: ngm root could not be created\n");
         exit(EXIT_FAILURE);
     }
 
-    ngm_show_CRTC(ngm);
-    ngm_show_framebuffer(ngm);
+    ngm_show_CRTC(root);
+    ngm_show_framebuffer(root);
+
+
+    ngm_set_crtc_from_root(root);
 
     ngm_vec2 start = {0,200};
     ngm_vec2 dest = {100,300};
-    ngm_set_line(ngm->fb, &start, &dest, 0xFF0000);
+    ngm_set_line(root->fb, &start, &dest, 0xFF0000);
 
-
-    if (drmModeSetCrtc(fd, ngm->display_info->crtc_id, ngm->fb->fb_id, 0, 0, &ngm->display_info->connector_id, 1, &ngm->display_info->mode)) {
-        perror("drmModeSetCrtc");
-        ngm_free_root(ngm);
-        close(fd);
-        return 1;
+    for (int y = dest.y; y < dest.y + 100; ++y) {
+        for (int x = dest.x; x < dest.x + 200; ++x) {
+            ngm_set_pixel_xy(root->fb, x, y, (x*0xFF + y*0xFF)%0xFFFFFF);
+            usleep(NGM_USLEEP_60FPS/10);
+        }
     }
 
     signal(SIGINT, handle_sig);
     while (running) pause();
 
     //clean
-    ngm_free_root(ngm);
+    ngm_free_root(root);
     close(fd);
     return 0;
 }

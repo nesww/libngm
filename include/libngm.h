@@ -48,8 +48,8 @@ extern int ngm_get_drm_fd(const char *path);
 extern ngm_framebuffer *ngm_get_dumb_buffer(int fd, ngm_display_output *info);
 
 extern void ngm_show_drm(int fd, drmModeResPtr res);
-extern void ngm_show_CRTC(ngm_root *ngm);
-extern void ngm_show_framebuffer(ngm_root *ngm);
+extern void ngm_show_CRTC(ngm_root *root);
+extern void ngm_show_framebuffer(ngm_root *root);
 
 typedef struct {
     int32_t x;
@@ -60,9 +60,11 @@ typedef struct {
     (((uint32_t*)(fb)->map)[(fb)->width * (y) + (x)])
 
 extern void ngm_set_pixel(ngm_framebuffer *fb, ngm_vec2* p, uint32_t color);
+extern void ngm_set_pixel_xy(ngm_framebuffer *fb, int32_t x, int32_t y, uint32_t color);
 extern void ngm_set_line(ngm_framebuffer *fb, ngm_vec2 *start, ngm_vec2 *destination, uint32_t color);
+extern void ngm_set_line_xy(ngm_framebuffer *fb, int32_t sx, int32_t sy, int32_t dx, int32_t dy,  uint32_t color);
 
-extern void ngm_free_root(ngm_root *ngm);
+extern void ngm_free_root(ngm_root *root);
 
 extern void ngm_log_init();
 extern void ngm_log_set_file(const char *path);
@@ -74,5 +76,9 @@ extern uint8_t ngm_get_log_level();
 #define NGM_LOG_WARN  0x2
 #define NGM_LOG_INFO  0x3
 #define NGM_LOG_DEBUG 0x4
+
+#define NGM_USLEEP_60FPS 16667
+
+extern uint8_t ngm_set_crtc_from_root(ngm_root *root);
 
 #endif

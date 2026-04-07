@@ -5,6 +5,9 @@
 #include <xf86drmMode.h>
 #include "libngm_log.h"
 
+#define TRUE 1
+#define FALSE 0
+
 extern void _ngm_free_display_info(ngm_display_output *info);
 extern void _ngm_free_framebuffer(int fd, ngm_framebuffer *fb);
 
